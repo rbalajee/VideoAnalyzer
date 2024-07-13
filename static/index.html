@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Upload</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 50px; display: flex; flex-direction: column; align-items: center; }
+        h1 { margin-bottom: 20px; }
+        form { display: flex; flex-direction: column; align-items: center; }
+        input[type="file"] { margin-bottom: 10px; }
+        button { margin: 5px; padding: 10px 20px; border: none; background-color: #3498db; color: white; cursor: pointer; border-radius: 5px; }
+        button:disabled { background-color: #cccccc; cursor: not-allowed; }
+        .spinner {
+            display: none;
+            border: 8px solid #f3f3f3;
+            border-radius: 50%;
+            border-top: 8px solid #3498db;
+            width: 60px;
+            height: 60px;
+            animation: spin 2s linear infinite;
+            margin-top: 20px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .error {
+            color: red;
+            margin-top: 20px;
+        }
+        pre { margin-top: 20px; white-space: pre-wrap; word-wrap: break-word; background-color: #f3f3f3; padding: 10px; border-radius: 5px; }
+        .progress-bar {
+            width: 100%;
+            background-color: #f3f3f3;
+            border-radius: 5px;
+            margin-top: 20px;
+        }
+        .progress-bar-fill {
+            height: 20px;
+            background-color: #3498db;
+            width: 0;
+            border-radius: 5px;
+            transition: width 0.2s;
+        }
+        .log-button {
+            margin-top: 10px;
+            padding: 10px 20px;
+            border: none;
+            background-color: #3498db;
+            color: white;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Upload a Video File</h1>
+    <form id="uploadForm" enctype="multipart/form-data">
+        <input type="file" id="videoFile" name="videoFile" accept="video/*" required>
+        <div>
+            <button type="submit">Upload</button>
+            <button type="button" id="cancelButton" style="display: none;">Cancel</button>
+        </div>
+    </form>
+    <div class="spinner" id="spinner"></div>
+    <div class="progress-bar" id="progressBar" style="display: none;">
+        <div class="progress-bar-fill" id="progressBarFill"></div>
+    </div>
+    <pre id="result"></pre>
+    <div class="error" id="error"></div>
+    <button id="viewLogButton" class="log-button" style="display: none;">View Full Log</button>
+
+    <script>
+        let abortController;
+        let jobId;
+
+        document.getElementById('uploadForm').addEventListener('submit', function(event) {
+            event.preventDefault();
+
+            document.getElementById('spinner').style.display = 'block';
+            document.getElementById('cancelButton').style.display = 'inline';
+            document.getElementById('error').textContent = '';
+            document.getElementById('result').textContent = '';
+            document.getElementById('progressBar').style.display = 'block';
+            document.getElementById('progressBarFill').style.width = '0';
+
+            const formData = new FormData();
+            formData.append('videoFile', document.getElementById('videoFile').files[0]);
+
+            abortController = new AbortController();
+            const signal = abortController.signal;
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/upload');
+
+            xhr.upload.onprogress = function(event) {
+                if (event.lengthComputable) {
+                    const percentComplete = (event.loaded / event.total) * 100;
+                    document.getElementById('progressBarFill').style.width = percentComplete + '%';
+                }
+            };
+
+            xhr.onload = function() {
+                document.getElementById('spinner').style.display = 'none';
+                document.getElementById('cancelButton').style.display = 'none';
+
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    const response = JSON.parse(xhr.responseText);
+                    jobId = response.id;
+                    checkStatus();
+                } else {
+                    document.getElementById('error').textContent = `Error: ${xhr.statusText}`;
+                }
+            };
+
+            xhr.onerror = function() {
+                document.getElementById('spinner').style.display = 'none';
+                document.getElementById('cancelButton').style.display = 'none';
+                document.getElementById('error').textContent = 'An error occurred during the upload';
+            };
+
+            xhr.onabort = function() {
+                document.getElementById('spinner').style.display = 'none';
+                document.getElementById('cancelButton').style.display = 'none';
+                document.getElementById('error').textContent = 'Upload canceled';
+            };
+
+            xhr.send(formData);
+
+            document.getElementById('cancelButton').addEventListener('click', function() {
+                xhr.abort();
+            });
+        });
+
+        function checkStatus() {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', `/status?id=${jobId}`);
+            xhr.onload = function() {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    const response = JSON.parse(xhr.responseText);
+                    document.getElementById('progressBarFill').style.width = response.progress + '%';
+                    if (response.status === 'completed') {
+                        document.getElementById('result').textContent = `File Info:\n${response.file_info}\n\nFFmpeg Errors:\n${response.ffmpeg_error}`;
+                        document.getElementById('spinner').style.display = 'none';
+                        document.getElementById('cancelButton').style.display = 'none';
+                        document.getElementById('viewLogButton').style.display = 'inline';
+                    } else if (response.status === 'processing') {
+                        setTimeout(checkStatus, 1000); // Check again in 1 second
+                    } else {
+                        document.getElementById('error').textContent = 'An error occurred during processing';
+                        document.getElementById('spinner').style.display = 'none';
+                        document.getElementById('cancelButton').style.display = 'none';
+                    }
+                } else {
+                    document.getElementById('error').textContent = `Error: ${xhr.statusText}`;
+                }
+            };
+            xhr.send();
+        }
+
+        document.getElementById('viewLogButton').addEventListener('click', function() {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', `/log?id=${jobId}`);
+            xhr.onload = function() {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    const logWindow = window.open("", "FFmpeg Log", "width=600,height=400");
+                    logWindow.document.write(`<pre>${xhr.responseText}</pre>`);
+                } else {
+                    document.getElementById('error').textContent = `Error: ${xhr.statusText}`;
+                }
+            };
+            xhr.send();
+        });
+    </script>
+</body>
+</html>
